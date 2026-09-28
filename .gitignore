@@ -1,0 +1,1 @@
+python -c "open('.gitignore','w').write('\n'.join(['artifacts/','output/','output_v1/','package/','work/','dataset/','__pycache__/','*.pyc','*.parquet','*.npy','*.pt','*.safetensors','*.zip','*.log'])+'\n')"

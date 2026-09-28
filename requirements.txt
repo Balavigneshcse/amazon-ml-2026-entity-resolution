@@ -1,0 +1,12 @@
+polars==1.44.2
+numpy==2.5.3
+scikit-learn==1.9.1
+lightgbm==4.7.0
+rapidfuzz==3.14.6
+Unidecode==1.4.0
+# GPU cross-encoder (src/gpu_ce.py); CUDA build of torch, e.g. pip install torch --index-url https://download.pytorch.org/whl/cu126
+torch==2.14.0
+transformers==5.17.0
+tokenizers==0.23.2
+safetensors==0.8.0
+huggingface_hub==1.33.0
