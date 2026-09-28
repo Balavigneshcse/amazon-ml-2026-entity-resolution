@@ -1,12 +1,18 @@
 # Business Entity Resolution — Team LOGIC MAKERS
 
-Pipeline: **normalise → multi-key blocking (100 candidates / entity) → stage 1 LightGBM (filter) → stage 2 LightGBM
-(precision features, trained at test-like density) → stage 3 LightGBM (refinement) → one-owner decoding**.
-No external data, APIs, geocoding or pretrained weights are used. The only models are LightGBM (MIT licence).
+Amazon ML Challenge 2026 — public leaderboard macro F0.5 **0.977678**.
+
+Pipeline: **normalise → multi-key blocking (100 candidates / entity) → stage-1 LightGBM filter (≈ 5 / entity) + GPU dense
+retrieval (fine-tuned MiniLM bi-encoder, ≈ 3 more / entity) → cluster-consistency LightGBM + fine-tuned MiniLM
+cross-encoders → LightGBM stacker → one-owner decoding** (France: two-threshold decoding).
+No external data, APIs or geocoding are used. Pretrained weights: `cross-encoder/ms-marco-MiniLM-L-6-v2`,
+`cross-encoder/ms-marco-MiniLM-L-12-v2`, `sentence-transformers/all-MiniLM-L6-v2` (all Apache-2.0, ≤ 33 M parameters),
+fine-tuned on the training data only; LightGBM (MIT). Method and results: `Documentation.md`.
 
 ## Environment
-* Python 3.12; `pip install -r requirements.txt` (polars, numpy, scikit-learn, lightgbm, rapidfuzz, Unidecode).
-* Tested on Windows 11, 12 CPU cores, 15 GB RAM, ~110 GB free disk for intermediates. No GPU needed.
+* Python 3.12; `pip install -r requirements.txt` (polars, numpy, scikit-learn, lightgbm, rapidfuzz, Unidecode, torch with
+  CUDA, transformers).
+* Tested on Windows 11, 12 CPU cores, 15 GB RAM, RTX 3050 4 GB (GPU needed for the transformer steps), ~150 GB free disk.
 * Data is expected at `../dataset/student_resource/dataset/{train,test}` relative to this folder; override with the
   environment variables `ER_DATA` (dataset folder) and `ER_ART` (folder for intermediate files).
 * Every stage writes its results shard by shard and skips finished work, so an interrupted run is resumed by running the
@@ -79,4 +85,4 @@ everything after that ≈ 1.5 h.
   Localities (cities/regions) are learnt from each country's own Source-1 addresses.
 * Validation: 5 folds by hash of the Source-1 id; fold 0 is never used for fitting; stage-2/3 inputs are out-of-fold.
 * `candidate_pairs.tsv` lists exactly the pairs scored by the final matching models: blocking candidates that pass the
-  stage-1 filter (p1 >= 0.02), about 5 per Source-1 entity.
+  stage-1 filter (p1 >= 0.02) plus the dense-retrieval candidates (`ER_DN=1`), about 8.4 per Source-1 entity.
