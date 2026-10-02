@@ -1,7 +1,7 @@
 @echo off
 rem STEP 9: dense retrieval (GPU bi-encoder) finds true matches the blocking missed -> output\dn_all
-rem Resumable: if it stops, run the same command again. Close DaVinci / Docker / WhatsApp first (they use GPU memory).
-cd /d "C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML\business_entity_resolution\src"
+rem Resumable: if it stops, run the same command again. Needs ~3.5 GB free GPU memory (close other GPU applications).
+cd /d "%~dp0"
 set "ER_PMIN=0.02"
 echo ===== 1/7 training pairs %time%
 python -u -W ignore dense.py data || goto fail
@@ -20,5 +20,5 @@ python -u -W ignore dense.py write || goto fail
 echo ===== STEP 9 DONE %time%
 exit /b 0
 :fail
-echo ===== STEP 9 STOPPED WITH AN ERROR %time% - send me the error, then run the same command again to resume
+echo ===== STEP 9 STOPPED WITH AN ERROR %time% - fix the reported error, then run the same command again to resume
 exit /b 1

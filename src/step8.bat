@@ -1,7 +1,7 @@
 @echo off
 REM STEP 8 (overnight): second, larger cross-encoder (MiniLM-L-12, 33M params, Apache-2.0) on 2M different training pairs,
 REM then combine BOTH transformers with the cluster model. About 3.5 hours. Resumable: just run it again if it stops.
-cd /d "C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML\business_entity_resolution\src"
+cd /d "%~dp0"
 set "ER_CE_TAG=_l12"
 set "ER_CE_BASE=cross-encoder/ms-marco-MiniLM-L-12-v2"
 set "ER_CE_N=1000000"
@@ -22,7 +22,7 @@ if errorlevel 1 goto fail
 python -u -W ignore gpu_ce.py write
 if errorlevel 1 goto fail
 echo ===== 5/5 validate output\ce_all_l12 %time%
-cd /d "C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML"
+cd /d "%~dp0..\.."
 python -u dataset\student_resource\utils\validate_submission.py --matching business_entity_resolution\output\ce_all_l12\matching_results.tsv --candidate business_entity_resolution\package\LOGIC_MAKERS_submission\output\candidate_pairs.tsv --test-dir dataset\student_resource\dataset\test
 echo ===== STEP 8 DONE %time%
 exit /b 0

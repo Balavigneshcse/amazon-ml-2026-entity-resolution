@@ -1,16 +1,16 @@
 @echo off
 REM Full reproduction from raw data to the submission zip. Resumable: re-run after any interruption.
 cd /d "%~dp0"
-python -u -W ignore run.py train 1.0 f2 India US || goto fail
-python -u -W ignore train.py stage1 f2 India,US all || goto fail
-python -u -W ignore cluster.py train f2 India,US all || goto fail
+python -u -W ignore run.py train 1.0 f2 || goto fail
+python -u -W ignore train.py stage1 f2 auto all || goto fail
+python -u -W ignore cluster.py train f2 auto all || goto fail
 set "ER_ANC=1"
 set "ER_S2=anc"
-python -u -W ignore train.py stage2 f2 India,US all || goto fail
-python -u -W ignore tune.py f2 India,US all || goto fail
+python -u -W ignore train.py stage2 f2 auto all || goto fail
+python -u -W ignore tune.py f2 auto all || goto fail
 python -u -W ignore run.py test t1 || goto fail
 python -u -W ignore infer.py f2 t1 all --stage1-only || goto fail
-python -u -W ignore cluster.py test t1 France,India,US || goto fail
+python -u -W ignore cluster.py test t1 auto || goto fail
 python -u -W ignore sim_drop.py || goto fail
 python -u -W ignore stage2_v3.py prep || goto fail
 python -u -W ignore stage2_v3.py feats || goto fail
@@ -30,7 +30,7 @@ set "ER_PMIN=0.02"
 python -u -W ignore infer.py f2 t1 all || goto fail
 python -u -W ignore stage2_v3.py infer || goto fail
 python -u -W ignore stage3.py infer || goto fail
-python -u -W ignore multi_variant.py final_p020 France=infer_hits_anc_p020:0.85 India=infer_hits_v4_tw_p020:0.75 US=infer_hits_anc_p020:0.7 || goto fail
+python -u -W ignore multi_variant.py final_p020 default=infer_hits_anc_p020:0.85 India=infer_hits_v4_tw_p020:0.75 US=infer_hits_anc_p020:0.7 || goto fail
 python -u -W ignore gpu_ce.py data || goto fail
 python -u -W ignore gpu_ce.py train || goto fail
 python -u -W ignore gpu_ce.py score || goto fail
@@ -52,9 +52,9 @@ python -u -W ignore dense.py embed || goto fail
 python -u -W ignore dense.py retrieve || goto fail
 python -u -W ignore dense.py ce || goto fail
 python -u -W ignore dense.py stack || goto fail
-python -u -W ignore multi_variant.py dn2_FR095 France=infer_hits_dn2:0.95 India=infer_hits_dn2:0.7 US=infer_hits_dn2:0.75 || goto fail
+python -u -W ignore multi_variant.py dn2_FR095 default=infer_hits_dn2:0.95 India=infer_hits_dn2:0.7 US=infer_hits_dn2:0.75 || goto fail
 call step10.bat || goto fail
-python -u -W ignore multi_variant.py final_FRgate France=infer_hits_dn2:0.8:0.95 India=infer_hits_dn23:0.8 US=infer_hits_dn23:0.7 || goto fail
+python -u -W ignore multi_variant.py final_FRgate default=infer_hits_dn2:0.8:0.95 India=infer_hits_dn23:0.8 US=infer_hits_dn23:0.7 || goto fail
 set "ER_DN=1"
 python -u -W ignore make_package.py final_FRgate || goto fail
 echo ===== REPRODUCTION DONE

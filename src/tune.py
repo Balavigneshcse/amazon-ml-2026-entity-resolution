@@ -1,15 +1,17 @@
 """Pick decoding thresholds (tau, gate) that maximise macro-F0.5 on the validation fold, averaged over countries.
 
-    python tune.py <train_tag> <countries,comma,sep> [mname]     -> artifacts/<tag>/decode_params_<mname>.json
+    python tune.py <train_tag> <countries,comma,sep | auto> [mname]     -> artifacts/<tag>/decode_params_<mname>.json
 """
 from __future__ import annotations
 import sys, json
 import polars as pl
-from config import ART, S2TAG
+from config import ART, S2TAG, countries as universe_countries
 from train import decode, fscore
 
 
 def tune(tag: str, countries: list, mname: str = "all") -> dict:
+    """Choose the decoding threshold and singleton gate that maximise the mean validation macro F0.5 over countries;
+    saved to decode_params_<mname>.json."""
     data = {}
     for c in countries:
         d = ART / tag / c
@@ -31,4 +33,5 @@ def tune(tag: str, countries: list, mname: str = "all") -> dict:
 
 
 if __name__ == "__main__":
-    tune(sys.argv[1], sys.argv[2].split(","), sys.argv[3] if len(sys.argv) > 3 else "all")
+    cs = list(universe_countries(sys.argv[1])) if sys.argv[2] == "auto" else sys.argv[2].split(",")
+    tune(sys.argv[1], cs, sys.argv[3] if len(sys.argv) > 3 else "all")

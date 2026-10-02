@@ -27,12 +27,15 @@ CTX = ["cos_rel_s1", "cos_gap_s1", "n_cand", "n_s1_for_r", "cos_top1_r", "cos_ma
 
 
 def _jac(a: set, b: set) -> float:
+    """Jaccard similarity of two sets (NaN if either is empty)."""
     if not a or not b:
         return NAN
     return len(a & b) / len(a | b)
 
 
 def _chunk_feats(c: dict) -> np.ndarray:
+    """Pool worker: name and address similarity features (SIM_NAMES) for a chunk of pairs; the address features
+    are NaN when either address is missing."""
     n = len(c["nsq_a"])
     out = np.empty((n, len(SIM_NAMES)), dtype=np.float32)
     for i in range(n):
@@ -89,6 +92,7 @@ def _chunk_feats(c: dict) -> np.ndarray:
 
 
 def _sides(df: pl.DataFrame, sfx: str) -> dict:
+    """Column lists of one side of the pairs (a = Source-1 entity, b = candidate record) for the feature workers."""
     return {f"nsq_{sfx}": df["name_sq"].to_list(), f"core_{sfx}": df["name_core"].to_list(),
             f"skel_{sfx}": df["name_skel"].to_list(), f"toks_{sfx}": df["name_toks"].to_list(),
             f"dom_{sfx}": df["is_domain"].to_list(), f"an_{sfx}": df["addr_norm"].to_list(),
@@ -109,6 +113,8 @@ def compute_feats(pairs: pl.DataFrame, s1: pl.DataFrame, cand: pl.DataFrame, poo
 
 
 def build_country_feats(tag: str, country: str, kfeat: int = KBLOCK, procs: int | None = None) -> None:
+    """Similarity features for the top-kfeat blocking candidates of one country, shard by shard with a
+    process pool (resumable)."""
     d = ART / tag / country
     out = d / "feats"
     if (out / "_DONE").exists():

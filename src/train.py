@@ -9,8 +9,9 @@ Decode:  each candidate record goes to its best S1 owner (partition constraint),
 One model is fit across all listed countries (no country feature, so it transfers to unseen countries such as France).
 `--train-on` lets you fit on a subset of countries and score the others (leave-one-country-out robustness check).
 
-Usage:  python train.py stage1 <tag> <countries,comma,sep> [mname] [train_on,comma,sep]
-        python train.py stage2 <tag> <countries,comma,sep> [mname] [train_on,comma,sep]
+Usage:  python train.py stage1 <tag> <countries,comma,sep | auto> [mname] [train_on,comma,sep]
+        python train.py stage2 <tag> <countries,comma,sep | auto> [mname] [train_on,comma,sep]
+(auto = every country of the universe, as found in the data)
 All steps are resumable (trees are checkpointed every 100 rounds; prediction is per shard).
 """
 from __future__ import annotations
@@ -18,7 +19,7 @@ import os, sys, time
 import numpy as np
 import polars as pl
 import lightgbm as lgb
-from config import ART, SEED, USE_ANC, S2TAG
+from config import ART, SEED, USE_ANC, S2TAG, countries as universe_countries
 from features import SIM_NAMES, BLOCK_COLS, CTX, add_context
 
 USE_X = os.environ.get("ER_X", "0") == "1"
@@ -62,23 +63,28 @@ FOLD = ((pl.col("s1").hash(SEED + 1) % 100) // 20).cast(pl.UInt8).alias("fold")
 
 
 def _d(tag, country):
+    """Folder of a country's universe."""
     return ART / tag / country
 
 
 def _n_s1(d) -> int:
+    """Number of Source-1 entities in a universe."""
     return pl.scan_parquet(d / "s1_*.parquet").select(pl.len()).collect().item()
 
 
 def _gt_y(d) -> pl.DataFrame:
+    """True pairs of a universe with label y = 1."""
     return pl.read_parquet(d / "gt.parquet").with_columns(pl.lit(1, dtype=pl.Int8).alias("y"))
 
 
 def _sample_filter(folds: list, n_s1_total: int, max_s1: int) -> pl.Expr:
+    """Selects the entities of the given folds, subsampled by hash so that about max_s1 entities are used."""
     per_mille = int(min(1000, 1000 * max_s1 / max(1, n_s1_total * len(folds) / 5)))
     return FOLD.is_in(folds) & ((pl.col("s1").hash(SEED + 3) % 1000) < per_mille)
 
 
 def train_resumable(X: np.ndarray, y: np.ndarray, names: list, path, rounds: int, block: int = 100) -> lgb.Booster:
+    """Resumable LightGBM training (trees added in blocks, saved after each block)."""
     ds = lgb.Dataset(X, label=y, feature_name=names, free_raw_data=False)
     booster = lgb.Booster(model_file=str(path)) if path.exists() else None
     done = booster.num_trees() if booster else 0
@@ -91,12 +97,14 @@ def train_resumable(X: np.ndarray, y: np.ndarray, names: list, path, rounds: int
 
 
 def _mdir(tag, mname):
+    """Model folder artifacts/<tag>/models_<mname> (created if missing)."""
     p = ART / tag / f"models_{mname}"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def _pred_dir(tag, country, mname):
+    """Folder for a country's out-of-fold stage-1 predictions (created if missing)."""
     p = _d(tag, country) / f"pred_{mname}"
     p.mkdir(exist_ok=True)
     return p
@@ -165,6 +173,8 @@ def rp_stats(d, mname) -> pl.DataFrame:
 
 
 def add_stage2(df: pl.DataFrame, rp: pl.DataFrame) -> pl.DataFrame:
+    """Stage-2 context features from stage-1 scores: rank / max / gap / second best / sum within the entity, and
+    competition for the record (best competing entity's score, margin, ratio)."""
     df = df.join(rp, on="r", how="left")
     comp = pl.when(pl.col("p1") >= pl.col("pt1")).then(pl.col("pt2")).otherwise(pl.col("pt1"))
     return df.with_columns(
@@ -181,6 +191,8 @@ def add_stage2(df: pl.DataFrame, rp: pl.DataFrame) -> pl.DataFrame:
 
 
 def stage2(tag: str, countries: list, mname: str = "all", train_on: list | None = None, max_s1: int = 90_000) -> None:
+    """Train the original stage-2 model on folds 1-4 and report validation AP and macro F0.5 per country (validation
+    predictions are saved for threshold tuning)."""
     train_on = train_on or countries
     md = _mdir(tag, mname)
     per_c = max_s1 // len(train_on)
@@ -236,6 +248,7 @@ def fscore(pred: pl.DataFrame, gt: pl.DataFrame, s1_ids: pl.Series) -> float:
 
 
 def sweep(df: pl.DataFrame, gt: pl.DataFrame, s1_val: pl.Series, pcol: str):
+    """Best validation macro F0.5 over assignment mode, threshold and singleton gate."""
     best = (0.0, None)
     for assign in (False, True):
         for tau in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9):
@@ -249,7 +262,8 @@ def sweep(df: pl.DataFrame, gt: pl.DataFrame, s1_val: pl.Series, pcol: str):
 
 
 if __name__ == "__main__":
-    cmd, tag, countries = sys.argv[1], sys.argv[2], sys.argv[3].split(",")
+    cmd, tag = sys.argv[1], sys.argv[2]
+    countries = list(universe_countries(tag)) if sys.argv[3] == "auto" else sys.argv[3].split(",")
     mname = sys.argv[4] if len(sys.argv) > 4 else "all"
     train_on = sys.argv[5].split(",") if len(sys.argv) > 5 else None
     {"stage1": stage1, "stage2": stage2}[cmd](tag, countries, mname, train_on)

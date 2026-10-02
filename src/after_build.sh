@@ -1,7 +1,7 @@
 #!/bin/bash
 # Waits for the test build (run.py test t1) to finish, then runs inference and the official validator.
 # Usage: bash after_build.sh   (from anywhere)
-ROOT="C:/Users/Balavignesh K/Documents/Studies/Hackathon/Amazon ML"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"   # project root (contains dataset/ and business_entity_resolution/)
 ART="$ROOT/business_entity_resolution/artifacts"
 cd "$ROOT/business_entity_resolution/src" || exit 1
 

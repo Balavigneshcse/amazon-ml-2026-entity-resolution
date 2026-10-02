@@ -1,14 +1,20 @@
 """Per-country submission from any saved scores: each country picks its own model scores and threshold.
 
-    python multi_variant.py <name> France=<hits>:<tau>[:<gate>] India=<hits>:<tau> US=<hits>:<tau>
+    python multi_variant.py <name> <country>=<hits>:<tau>[:<gate>] ... [default=<hits>:<tau>[:<gate>]]
 hits = folder under artifacts/t1/<country>/ (infer_hits_anc = cluster model, infer_hits_v4_tw = v5 twin-aware, ...)
 gate (optional) = an entity gets matches only if its best candidate scores >= gate; its other records need >= tau
+default (optional) = setting for every test country that is not listed (e.g. countries without training labels)
 """
 import sys
 import polars as pl
-from config import ART, DATA, ROOT
+from config import ART, DATA, ROOT, countries
 
-name, spec = sys.argv[1], dict(a.split("=") for a in sys.argv[2:])
+name, spec = sys.argv[1], dict(a.split("=", 1) for a in sys.argv[2:])
+default = spec.pop("default", None)
+if default:
+    for c in countries("t1"):
+        spec.setdefault(c, default)
+spec = dict(sorted(spec.items()))
 out = ROOT / "output" / name
 out.mkdir(parents=True, exist_ok=True)
 parts = []

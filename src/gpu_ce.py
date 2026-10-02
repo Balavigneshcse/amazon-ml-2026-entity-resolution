@@ -15,11 +15,13 @@ from __future__ import annotations
 import os, sys, time, json
 import numpy as np
 import polars as pl
-from config import ART, SEED
+from config import ART, SEED, countries
 
 # second model (step 8): ER_CE_TAG=_l12 ER_CE_BASE=cross-encoder/ms-marco-MiniLM-L-12-v2 ER_CE_N=1000000
 TAG = os.environ.get("ER_CE_TAG", "")
 BASE = os.environ.get("ER_CE_BASE", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+if BASE.startswith("@art/"):                     # a model fine-tuned earlier in this run, e.g. @art/ce_model_l12/final
+    BASE = str(ART / BASE[len("@art/"):])
 N_PER_COUNTRY = int(os.environ.get("ER_CE_N", "600000"))
 STACK_TAGS = [t for t in os.environ.get("ER_CE_STACK", "").split(",")] if os.environ.get("ER_CE_STACK") is not None else [""]
 SSFX = "".join(STACK_TAGS)                     # suffix of stacker outputs ("" = first model only, "_l12" = both)
@@ -28,11 +30,12 @@ P_MIN = 0.02
 MAXLEN = 96
 DROPPED = (pl.col("s1").hash(SEED + 5) % 100) < 19
 FOLD = ((pl.col("s1").hash(SEED + 1) % 100) // 20).cast(pl.UInt8)
-TRAIN_C, TEST_C = ("India", "US"), ("France", "India", "US")
+TRAIN_C, TEST_C = countries("f2"), countries("t1")         # labelled training countries / all test countries
 TAUS = (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95)
 
 
 def _text(d, ids: pl.Series, which: str) -> pl.DataFrame:
+    """Cross-encoder input text 'name | address' (raw fields, at most 200 characters) for the given ids."""
     f = "s1_*.parquet" if which == "s1" else "cand_*.parquet"
     t = (pl.scan_parquet(d / f).select("id", "name", "addr").filter(pl.col("id").is_in(ids.unique().implode())).collect()
          .select(pl.col("id"), (pl.col("name").fill_null("") + " | " + pl.col("addr").fill_null("")).str.slice(0, 200).alias("t")))
@@ -40,6 +43,7 @@ def _text(d, ids: pl.Series, which: str) -> pl.DataFrame:
 
 
 def pairs_text(d, p: pl.DataFrame) -> pl.DataFrame:
+    """Attach the Source-1 text (ta) and the candidate text (tb) to (s1, r) pairs, keeping the pair order."""
     a = _text(d, p["s1"], "s1").rename({"id": "s1", "t": "ta"})
     b = _text(d, p["r"], "cand").rename({"id": "r", "t": "tb"})
     return p.join(a, on="s1", how="left", maintain_order="left").join(b, on="r", how="left", maintain_order="left")
@@ -54,6 +58,8 @@ def check() -> None:
 
 
 def data(n_per_country: int = N_PER_COUNTRY) -> None:
+    """Training pairs for a cross-encoder: a sample of filtered candidate pairs (p1 >= 0.02) from the training folds
+    only (the validation fold is never used), labelled from the ground truth."""
     out = ART / f"ce_train{TAG}.parquet"
     if out.exists():
         print("[ce] training pairs exist, skip")
@@ -129,6 +135,7 @@ def _scorer():
     model = AutoModelForSequenceClassification.from_pretrained(CE_DIR / "final").to("cuda").half().eval()
 
     def score(ta, tb, bs=512):
+        """Probability that each (ta, tb) text pair is the same business (fp16 batches)."""
         out = np.empty(len(ta), dtype=np.float32)
         with torch.no_grad():
             for i in range(0, len(ta), bs):
@@ -139,6 +146,8 @@ def _scorer():
 
 
 def score_all() -> None:
+    """Score the validation-fold candidates and all test candidates with the fine-tuned cross-encoder, shard by
+    shard (resumable)."""
     score = _scorer()
     jobs = [(ART / "f2" / c, "val_d19", f"ce_val{TAG}") for c in TRAIN_C] + [(ART / "t1" / c, "infer_p1", f"ce{TAG}") for c in TEST_C]
     for d, src, dst in jobs:
@@ -162,6 +171,8 @@ S_FEATS = ["p1", "p2c", "p2_rank_s1", "n_cand"] + [f"{k}{t}" for t in STACK_TAGS
 
 
 def _feats(df: pl.DataFrame) -> pl.DataFrame:
+    """Per-entity context for the stacker: rank of the cluster-model score, number of candidates, and each
+    cross-encoder score's rank / max / gap / sum within the entity."""
     ex = [pl.col("p2c").rank("ordinal", descending=True).over("s1").cast(pl.Float32).alias("p2_rank_s1"),
           pl.len().over("s1").cast(pl.Float32).alias("n_cand")]
     for t in STACK_TAGS:
@@ -172,12 +183,15 @@ def _feats(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _ce_join(df: pl.DataFrame, d, folder: str) -> pl.DataFrame:
+    """Join the scores of every stacked cross-encoder (<folder><tag>/shard_*.parquet) onto the pairs."""
     for t in STACK_TAGS:
         df = df.join(pl.read_parquet(d / f"{folder}{t}" / "shard_*.parquet"), on=["s1", "r"], how="left")
     return df
 
 
 def stack() -> None:
+    """Fit the LightGBM stacker (stage-1 p1, cluster-model p2, cross-encoder features) on the validation fold with
+    2-fold cross-fitting, compare it with the cluster model, save model and thresholds, score the test candidates."""
     import lightgbm as lgb
     from train import decode, fscore, PARAMS
     frames, evals = [], {}
@@ -229,18 +243,14 @@ def stack() -> None:
 
 
 def write() -> None:
-    """Submission variants: cross-encoder everywhere, and our best file with one country switched to it (leaderboard tests)."""
+    """Write output/ce_all<suffix>: each labelled country uses the threshold tuned on its validation fold; every country
+    without training labels (here France) uses the strictest of those + 0.1, as an unseen country over-matched on the
+    leaderboard."""
     import subprocess
     tau = json.loads((ART / "f2" / f"decode_params_ce{SSFX}.json").read_text())
-    t_in, t_us = tau["India"], tau["US"]
-    t_fr = min(0.97, max(t_in, t_us) + 0.1)                   # France (unseen) stricter, as the leaderboard showed
-    A, T, C = "infer_hits_anc_p020", "infer_hits_v4_tw_p020", f"infer_hits_ce{SSFX}"
-    best = {"France": f"{A}:0.85", "India": f"{T}:0.75", "US": f"{A}:0.7"}
-    ce = {"France": f"{C}:{t_fr}", "India": f"{C}:{t_in}", "US": f"{C}:{t_us}"}
-    variants = {f"ce_all{SSFX}": ce} if SSFX else {"ce_all": ce, "final_ceUS": {**best, "US": ce["US"]},
-                                                   "final_ceIN": {**best, "India": ce["India"]}, "final_ceFR": {**best, "France": ce["France"]}}
-    for name, spec in variants.items():
-        subprocess.run([sys.executable, "-W", "ignore", "multi_variant.py", name] + [f"{k}={v}" for k, v in spec.items()], check=True)
+    t_unseen = min(0.97, max(tau.values()) + 0.1)
+    spec = {c: f"infer_hits_ce{SSFX}:{tau.get(c, t_unseen)}" for c in TEST_C}
+    subprocess.run([sys.executable, "-W", "ignore", "multi_variant.py", f"ce_all{SSFX}"] + [f"{k}={v}" for k, v in spec.items()], check=True)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,7 @@ def add_p2feats(df: pl.DataFrame, tabs: tuple) -> pl.DataFrame:
 
 
 def _fit(X, y, path, rounds):
+    """Resumable LightGBM training (trees added in blocks of 100, saved after each block)."""
     ds = lgb.Dataset(X, label=y, free_raw_data=False)
     booster = lgb.Booster(model_file=str(path)) if path.exists() else None
     done = booster.num_trees() if booster else 0
@@ -59,6 +60,8 @@ def _fit(X, y, path, rounds):
 
 
 def train() -> None:
+    """Train the stage-3 refinement model on features recomputed from out-of-fold stage-2 scores; report plain and
+    test-like validation F0.5 and save the threshold."""
     t0 = time.time()
     tr_parts, va_parts, tabs = [], {}, {}
     for c in V.TRAIN_C:
@@ -109,6 +112,7 @@ def train() -> None:
 
 
 def infer() -> None:
+    """Score the filtered test candidates with stage 2 v3 and then the stage-3 refinement model (keeps p2 >= 0.3)."""
     m3 = lgb.Booster(model_file=str(MD / f"model_s2_v3{V.MSFX}.txt"))
     m4 = lgb.Booster(model_file=str(MD / f"model_s3{V.MSFX}.txt"))
     for c in V.TEST_C:

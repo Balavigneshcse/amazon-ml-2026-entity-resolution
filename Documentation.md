@@ -10,10 +10,11 @@
 We treat entity resolution as **candidate generation (keys + GPU dense retrieval) + learned filtering + GPU cross-encoders
 combined with gradient-boosted pair models + one-owner decoding**. Multi-key blocking keeps 100 candidates per Source-1 entity; a
 stage-1 LightGBM filter cuts them to ≈ 5 per entity, and a fine-tuned bi-encoder (dense retrieval) adds ≈ 3 more that the keys
-missed (≈ 8 per entity in `candidate_pairs.tsv`). Two small pretrained transformer cross-encoders
-(`cross-encoder/ms-marco-MiniLM-L-6-v2`, 22 M parameters, and `ms-marco-MiniLM-L-12-v2`, 33 M parameters, both Apache-2.0),
-fine-tuned on a laptop RTX 3050, read both records' "name | address" text jointly; a LightGBM stacker combines their scores
-with our feature-based matching model.
+missed (≈ 8 per entity in `candidate_pairs.tsv`). Small pretrained transformer cross-encoders
+(`cross-encoder/ms-marco-MiniLM-L-6-v2`, 22 M parameters, and `ms-marco-MiniLM-L-12-v2`, 33 M parameters, both Apache-2.0;
+the L-12 model is fine-tuned a second time on dense-retrieval pairs, giving three cross-encoders), fine-tuned on a laptop
+RTX 3050, read both records' "name | address" text jointly; a LightGBM stacker combines their scores with our
+feature-based matching model.
 Each Source-2/3 record is then given to its single best Source-1 entity above an F0.5-tuned threshold.
 Public leaderboard: **0.977678** (without dense retrieval: 0.970; one cross-encoder: 0.9677; feature models alone: 0.9462).
 Held-out validation: India 0.987, US 0.987. No external data or lookup services are used; the only pretrained weights are
@@ -38,12 +39,14 @@ Training data: 2.2 M Source-1, 5.0 M Source-2, 5.3 M Source-3 records (test: 1.7
   absent from Source 1). France (unseen in training) over-matched until its threshold was raised.
 
 ### 2.2 Solution Strategy
-**Approach type:** Blocking + 3-stage LightGBM cascade + partition-aware decoding.  
+**Approach type:** key blocking + GPU dense retrieval → LightGBM pair models + fine-tuned transformer cross-encoders →
+LightGBM stacker → partition-aware decoding.  
 **Final configuration:** stage-1 filter p1 ≥ 0.02 (≈ 5 candidates per entity) + dense-retrieval candidates (≤ 5 new per
 entity above a similarity floor) → GPU cross-encoders + cluster-consistency stage-2 model → LightGBM stacker with dense
-similarity and record-competition features. India/US: stacker over three cross-encoders (τ 0.80 India, 0.70 US). France
-(unseen in training): stacker over two cross-encoders with two-threshold decoding — an entity is matched only if its best
-candidate scores ≥ 0.95, and then its other records need ≥ 0.80.  
+similarity and record-competition features. Labelled countries (India, US): stacker over three cross-encoders (τ 0.80
+India, 0.70 US, tuned on validation). Countries without training labels (France in this test set): stacker over two
+cross-encoders with two-threshold decoding — an entity is matched only if its best candidate scores ≥ 0.95, and then its
+other records need ≥ 0.80. The country list itself is read from the data; nothing is tied to a fixed set of countries.  
 **Core innovations:** (1) sibling-support features exploiting the per-source address re-write; (2) a leaderboard-like
 validation universe (19 % of entities removed so their records become unowned) used for training stage 2/3 and choosing
 thresholds; (3) country-agnostic locality conflict learnt from each country's own addresses; (4) a test-like metric in
@@ -117,9 +120,10 @@ other candidates (score-weighted sibling support, rank, share, gap). Training ro
 
 **Model type:** LightGBM binary (127 leaves, learning rate 0.1, 300–400 rounds, feature/bagging fraction 0.8); one model for
 all countries; `country` is never a feature.  
-**Decoding and thresholds:** each record goes to its highest-scoring entity; pairs are kept if the score ≥ τ. τ is chosen on
-the leaderboard-like validation with the test-like metric (τ = 0.8); France uses τ + 0.1 because leaderboard feedback showed
-it over-matches.
+**Decoding and thresholds:** each record goes to its highest-scoring entity; pairs are kept if the score ≥ τ. τ is chosen
+per labelled country on the leaderboard-like validation (final stacker: 0.80 India, 0.70 US). Countries without training
+labels (France) use two-threshold decoding (best candidate ≥ 0.95, other records ≥ 0.80), chosen from leaderboard feedback
+and the data generator's match-count structure (Appendix B).
 
 ## 5. Results & Error Analysis
 Validation = held-out entities at test-like density (19 % of entities removed). "Test-like" additionally weights false
@@ -137,9 +141,24 @@ matches on unowned records ×8 to mimic the test's distractor density.
 | + record-competition features | 0.70 / 0.75 | 0.9860 | 0.9863 | – | – |
 | **+ third cross-encoder — final (India/US)** | 0.80 / 0.70 | **0.9871** | **0.9871** | – | – |
 
-Public leaderboard (macro F0.5): 0.934 (first pipeline) → 0.940 (cluster consistency + test-like threshold) → 0.941
-(stricter France threshold) → 0.946 (India from the twin-aware cascade) → 0.946168 (≈ 5 candidates per entity) → 0.967657 (GPU cross-encoder + stacker) → 0.970 (two cross-encoders + stacker) → 0.977 (+ dense retrieval) →
-0.977655 (+ record competition, France τ 0.95) → **0.977678 (third cross-encoder for India/US, France two-threshold decoding)**.
+**Submission history (public leaderboard, macro F0.5).** Every upload is listed with its time and score on the challenge
+portal; the table gives the versions that changed the method (output folder names as produced by the code).
+
+| date (IST) | version | change | public LB |
+|---|---|---|---|
+| 26 Sep | `v1` | first pipeline: key blocking + two-stage LightGBM | 0.9345 |
+| 26 Sep | `variant_anc` | + cluster-consistency stage 2, test-like threshold | 0.940 |
+| 26 Sep | France probes | France τ 0.5 / same-name rescue / τ 0.85 (`probe_fr_high`) | 0.937 / 0.936 / 0.941 |
+| 26 Sep | `v5` | stage 2 v3 + stage 3 + twin features for every country | 0.933 |
+| 26 Sep | `best_v5IN` | 0.941 file with India from the twin-aware cascade | 0.945759 |
+| 26 Sep 14:37 | `final_p020` | stage-1 filter p1 ≥ 0.02 (≈ 5 candidates per entity) | 0.946168 |
+| 26 Sep 16:18 | `ce_all` | + GPU cross-encoder (MiniLM-L-6) and stacker | 0.967657 |
+| 27 Sep 00:08 | `ce_all_l12` | + second cross-encoder (MiniLM-L-12) | 0.970 |
+| 27 Sep 06:36 | `dn_all` | + dense-retrieval candidates | ≈ 0.977 |
+| 27 Sep 06:52 | `dn2_FR095` | + record-competition features, France τ 0.95 | 0.977655 |
+| 27 Sep 12:38 | `dn23_all` | + third cross-encoder for every country | 0.977139 |
+| 27 Sep 17:39 | `final_FRgate` | third cross-encoder for India/US only; France two-threshold decoding | **0.977678 (final)** |
+
 Per-country tests on the leaderboard: twin-aware cascade for India +0.005, for US −0.012, for France −0.001.
 
 * **False positives:** near-twin businesses (same name, house number ±1–20, different legal form) whose own entity is
@@ -153,10 +172,14 @@ Per-country tests on the leaderboard: twin-aware cascade for India +0.005, for U
   leaderboard was needed to pick the model for each country.
 
 ## 6. Conclusion
-A blocking + three-stage LightGBM cascade reaches ≈ 0.96 macro-F0.5 on held-out entities using only the provided data and a
-laptop CPU. The biggest gains came from understanding the data-generation structure (per-source address re-writes) and from
-validating at the test set's distractor density rather than the training density. Remaining headroom is blocking recall
-and near-twin distractors.
+Key blocking with a learned filter, GPU dense retrieval for recall, and fine-tuned MiniLM cross-encoders combined with
+LightGBM pair models reach macro F0.5 ≈ 0.987 on held-out India/US entities and 0.977678 on the public leaderboard, using
+only the provided data (plus Apache-2.0 pretrained MiniLM weights) on one laptop with a 4 GB GPU. The largest gains came
+from the transformer cross-encoders (+0.024 on the leaderboard), dense retrieval (+0.007), understanding the data
+generation (per-source address re-writes, one owner per record) and validating at the test set's distractor density.
+The remaining gap is the country without training labels: if India/US score on the test as on validation, the leaderboard
+implies ≈ 0.93 for France. Within India/US most remaining errors are records without an address whose generic name is
+shared by several entities.
 
 ## Appendix
 ### A. Code Artefacts
@@ -176,5 +199,5 @@ See `code/business_entity_resolution/README.md`. Entry point: `src/reproduce.bat
   generator's structure for France (`multi_variant.py` supports it as `hits:tau:gate`); it is part of the final submission.
 * Per-source structure features in the stacker (+0.0001) and France street-name / house-number rules (mismatches were mostly
   typos or genuinely different businesses) were tested and not used.
-* Leave-one-country-out (fit on US, score India) shows ≈ 3 points lower F0.5 on an unseen country, which motivated the
-  country-agnostic features and the stricter France threshold.
+* Leave-one-country-out (fit on one labelled country, score the other) shows ≈ 3 points lower F0.5 on an unseen country,
+  which motivated the country-agnostic features and the stricter threshold for the unseen country.

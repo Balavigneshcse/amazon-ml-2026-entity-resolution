@@ -17,7 +17,7 @@ os.environ.setdefault("ER_S2", "anc")
 import numpy as np
 import polars as pl
 import lightgbm as lgb
-from config import ART, SEED, KBLOCK
+from config import ART, SEED, KBLOCK, countries
 from features import add_context
 from train import FEATS1, FEATS2, FOLD, add_stage2, with_anc, rp_stats, decode, fscore
 import cluster
@@ -30,6 +30,8 @@ TAUS = (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95)
 
 
 def rstats_drop(d) -> pl.DataFrame:
+    """Record-competition statistics (top-3 blocking cosines, number of entities per record) recomputed
+    without the dropped entities."""
     o = d / f"rstats_{SUF}.parquet"
     if o.exists():
         return pl.read_parquet(o)
@@ -42,6 +44,8 @@ def rstats_drop(d) -> pl.DataFrame:
 
 
 def stage1_drop(d, c, rst, models) -> None:
+    """Out-of-fold stage-1 scores at test-like density (each pair is scored by the fold model that never saw its
+    entity); validation-fold rows are also saved with their labels."""
     pdir, vdir = d / f"pred_{SUF}", d / f"val_{SUF}"
     pdir.mkdir(exist_ok=True)
     vdir.mkdir(exist_ok=True)
@@ -65,6 +69,7 @@ def stage1_drop(d, c, rst, models) -> None:
 
 
 def stage2_drop(d, c, rp, m2) -> pl.DataFrame:
+    """Cluster-model (stage-2) scores of the validation fold at test-like density."""
     o = d / f"val_pred_{MN}_anc_{SUF}.parquet"
     if o.exists():
         return pl.read_parquet(o)
@@ -79,6 +84,7 @@ def stage2_drop(d, c, rp, m2) -> pl.DataFrame:
 
 
 def claimed_per_s1(pred: pl.DataFrame, n: int) -> float:
+    """Predicted pairs per Source-1 entity."""
     return pred.height / max(1, n)
 
 
@@ -88,7 +94,7 @@ if __name__ == "__main__":
     models = {k: lgb.Booster(model_file=str(md / f"model_s1_k{k}.txt")) for k in range(5)}
     m2 = lgb.Booster(model_file=str(md / "model_s2_anc.txt"))
     table = {}
-    for c in ("India", "US"):
+    for c in countries(TAG):                                   # labelled countries found in the data
         d = ART / TAG / c
         rst = rstats_drop(d)
         print(f"[sim] {c}: rstats at {DROP}% dropped S1 ({time.time() - t0:.0f}s)", flush=True)

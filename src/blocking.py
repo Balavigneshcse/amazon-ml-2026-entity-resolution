@@ -64,14 +64,19 @@ def make_keys(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _indexed(df: pl.DataFrame) -> pl.DataFrame:
+    """Replace the string ids by consecutive integer row numbers (compact join keys)."""
     return df.drop("id").with_row_index("id")
 
 
 def n_shards_for(n_s1: int) -> int:
+    """Number of blocking shards for a country: about 20,000 Source-1 entities per shard, between 4 and 256."""
     return int(min(256, max(4, math.ceil(n_s1 / 20000))))
 
 
 def block_country(tag: str, country: str, kmax: int = KBLOCK, cap_frac: float = CAP_FRAC, shards=None, out_name: str = "blocks") -> None:
+    """Candidate generation for one country: hashed keys of 9 families for entities and records; keys held by more
+    than cap_frac of the records are dropped; pairs are ranked by the idf-weighted cosine of their shared keys and
+    the top kmax records are kept per Source-1 entity. Written shard by shard to <country>/<out_name>/ (resumable)."""
     d = ART / tag / country
     out = d / out_name
     if (out / "_DONE").exists():
@@ -122,6 +127,7 @@ def block_country(tag: str, country: str, kmax: int = KBLOCK, cap_frac: float = 
 
 
 def eval_blocking(tag: str, country: str) -> None:
+    """Print blocking recall@k (share of true pairs among the top-k candidates) for a labelled universe."""
     d = ART / tag / country
     bl = pl.read_parquet(d / "blocks" / "shard_*.parquet", columns=["s1", "r", "rank"])
     gt = pl.read_parquet(d / "gt.parquet")

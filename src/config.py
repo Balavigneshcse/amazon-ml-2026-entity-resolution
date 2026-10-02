@@ -13,3 +13,10 @@ USE_ANC = os.environ.get("ER_ANC", "0") == "1"                                  
 S2TAG = ("_" + os.environ["ER_S2"]) if os.environ.get("ER_S2") else ""             # suffix for stage-2 model / validation / thresholds
 PMIN = float(os.environ.get("ER_PMIN", "0.005"))   # stage-1 filter: pairs below this never reach the matching models
 HSFX = "" if abs(PMIN - 0.005) < 1e-9 else f"_p{int(round(PMIN * 1000)):03d}"   # suffix of score folders for other filters
+
+
+def countries(tag: str) -> tuple[str, ...]:
+    """Countries of a built universe: the folders artifacts/<tag>/<country>/ that build_universe.py marked _DONE. Their
+    names come from the data's country column, so no step of the pipeline depends on a fixed list of countries."""
+    d = ART / tag
+    return tuple(sorted(p.name for p in d.iterdir() if (p / "_DONE").exists())) if d.exists() else ()

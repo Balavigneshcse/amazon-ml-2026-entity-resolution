@@ -1,7 +1,7 @@
 @echo off
 REM STEP 2: stage-2 v3 (cleaned names, name frequency, city conflict) trained at leaderboard-like density.
 REM About 1-1.5 hours. Every part resumes from what is saved, so Ctrl+C and re-run is safe.
-cd /d "C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML\business_entity_resolution\src"
+cd /d "%~dp0"
 set "ER_ANC=1"
 set "ER_S2=anc"
 echo ===== 1/5 record tables %time%
@@ -23,7 +23,7 @@ python -u -W ignore write_variant.py v3 auto auto auto
 if errorlevel 1 goto fail
 python -u -W ignore write_variant.py v3_fr_strict auto+0.15 auto auto
 if errorlevel 1 goto fail
-cd /d "C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML"
+cd /d "%~dp0..\.."
 for %%V in (v3 v3_fr_strict) do python -u dataset\student_resource\utils\validate_submission.py --matching business_entity_resolution\output\%%V\matching_results.tsv --test-dir dataset\student_resource\dataset\test
 echo ===== STEP 2 DONE %time%
 exit /b 0

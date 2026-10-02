@@ -19,14 +19,18 @@ CHUNK = 1_500_000
 
 
 def _scan(split: str, i: int) -> pl.LazyFrame:
+    """Lazy reader for <split>_source<i>.tsv with the shared tab-separated read options (RD)."""
     return pl.scan_csv(DATA / split / f"{split}_source{i}.tsv", **RD)
 
 
 def _h(col: str, seed: int) -> pl.Expr:
+    """Deterministic hash bucket 0-9999 of a column (reproducible sampling)."""
     return pl.col(col).hash(seed) % 10000
 
 
 def _write_chunks(df: pl.DataFrame, d, name: str, country: str, is_s1: bool) -> None:
+    """Normalise records in chunks of CHUNK rows and write <name>_XXX.parquet; Source-1 rows get the is_val flag
+    (VAL_PCT % of entities, by id hash). Chunks already on disk are skipped."""
     for k, off in enumerate(range(0, df.height, CHUNK)):
         f = d / f"{name}_{k:03d}.parquet"
         if f.exists():
@@ -38,6 +42,9 @@ def _write_chunks(df: pl.DataFrame, d, name: str, country: str, is_s1: bool) -> 
 
 
 def build_train(frac: float, tag: str, only: list[str] | None = None) -> None:
+    """Build the per-country training universes: normalised Source-1 and candidate (Source-2 + Source-3) chunks and
+    the true pairs (gt.parquet). frac < 1 samples Source-1 entities (their records plus the same share of
+    unowned records); only restricts the countries. Finished countries are marked _DONE and skipped."""
     out = ART / tag
     thr = int(frac * 10000)
     t0 = time.time()

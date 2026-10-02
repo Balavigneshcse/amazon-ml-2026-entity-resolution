@@ -5,8 +5,8 @@ For every candidate with a non-negligible stage-1 score we therefore measure how
 already-confident matches ("anchors": up to 3 candidates with p1 >= 0.9). A candidate that is weak against the
 reference record but almost identical to a confident match is probably a match too.
 
-    python cluster.py train <tag> <countries> [mname]     # from the out-of-fold p1 of the training universe
-    python cluster.py test  <tag> <countries>              # from the test-time p1 (infer_p1)
+    python cluster.py train <tag> <countries | auto> [mname]     # from the out-of-fold p1 of the training universe
+    python cluster.py test  <tag> <countries | auto>            # from the test-time p1 (infer_p1)
 Output: <country>/anc_<mname>/shard_XXX.parquet or <country>/infer_anc/shard_XXX.parquet with columns (s1, r, ANC_NAMES).
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ import numpy as np
 import polars as pl
 from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
-from config import ART
+from config import ART, countries as universe_countries
 
 NAN = float("nan")
 ANC_NAMES = ["anc_n", "anc_p_max", "anc_name_max", "anc_name_jw_max", "anc_addr_max", "anc_num_eq"]
@@ -24,6 +24,8 @@ TXT = ["id", "name_sq", "name_core", "addr_norm", "addr_missing", "addr_nums"]
 
 
 def _chunk(c: dict) -> np.ndarray:
+    """Pool worker: for (candidate, anchor) pairs, name token-set ratio, core-name Jaro-Winkler, address token-set
+    ratio and first-house-number equality."""
     n = len(c["sa"])
     out = np.full((n, 4), NAN, dtype=np.float32)
     for i in range(n):
@@ -38,6 +40,9 @@ def _chunk(c: dict) -> np.ndarray:
 
 
 def build_dir(tag: str, country: str, src_dir: str, out_dir: str, step: int = 50000) -> None:
+    """Cluster-consistency features for one country: every candidate with p1 >= P_LOW is compared with the entity's
+    anchors (up to N_ANCHOR candidates with p1 >= P_ANCHOR); the best similarity per pair is kept (ANC_NAMES).
+    Reads <src_dir>/shard_*.parquet, writes <out_dir>/ (resumable)."""
     d = ART / tag / country
     out = d / out_dir
     if (out / "_DONE").exists():
@@ -79,7 +84,8 @@ def build_dir(tag: str, country: str, src_dir: str, out_dir: str, step: int = 50
 
 
 if __name__ == "__main__":
-    mode, tag, countries = sys.argv[1], sys.argv[2], sys.argv[3].split(",")
+    mode, tag = sys.argv[1], sys.argv[2]
+    countries = list(universe_countries(tag)) if sys.argv[3] == "auto" else sys.argv[3].split(",")
     mname = sys.argv[4] if len(sys.argv) > 4 else "all"
     for c in countries:
         if mode == "train":

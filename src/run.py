@@ -10,10 +10,12 @@ import sys
 from pathlib import Path
 import polars as pl
 import build_universe, blocking, features
-from config import ART
+from config import ART, countries as universe_countries
 
 
 def stages(tag: str, countries: list[str]) -> None:
+    """Blocking, recall report (labelled universes only), similarity features and record-competition statistics
+    for each country."""
     for c in countries:
         blocking.block_country(tag, c)
         blocking.eval_blocking(tag, c) if (ART / tag / c / "gt.parquet").exists() else None
@@ -26,8 +28,8 @@ if __name__ == "__main__":
     if mode == "train":
         frac, tag, countries = float(sys.argv[2]), sys.argv[3], sys.argv[4:]
         build_universe.build_train(frac, tag, countries or None)
-        stages(tag, countries or sorted(p.name for p in (ART / tag).iterdir() if p.is_dir()))
+        stages(tag, countries or list(universe_countries(tag)))
     else:
         tag = sys.argv[2]
         build_universe.build_test(tag)
-        stages(tag, sorted(p.name for p in (ART / tag).iterdir() if p.is_dir()))
+        stages(tag, list(universe_countries(tag)))

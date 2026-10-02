@@ -15,6 +15,7 @@ csv.field_size_limit(1 << 30)
 
 
 def load(path: str) -> dict[str, set[str]]:
+    """Read a results TSV into {source1_entity_id: set of matched ids}."""
     out = {}
     with open(path, encoding="utf-8", newline="") as f:
         rd = csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
@@ -26,6 +27,7 @@ def load(path: str) -> dict[str, set[str]]:
 
 
 def f05(pred: set[str], truth: set[str]) -> float:
+    """F0.5 of one Source-1 entity (1.0 when both lists are empty)."""
     if not pred and not truth:
         return 1.0
     tp = len(pred & truth)
@@ -33,6 +35,7 @@ def f05(pred: set[str], truth: set[str]) -> float:
 
 
 def score(pred: dict[str, set[str]], truth: dict[str, set[str]]) -> float:
+    """Macro F0.5 over every Source-1 entity of the ground truth (missing predictions count as empty)."""
     return sum(f05(pred.get(s1, set()), t) for s1, t in truth.items()) / len(truth)
 
 

@@ -22,7 +22,7 @@ CE_ENV = os.environ.get("ER_DN_CE", ",_l12")       # cross-encoders used by the 
 os.environ["ER_CE_STACK"] = CE_ENV
 import numpy as np
 import polars as pl
-from config import ART, SEED
+from config import ART, SEED, countries
 import gpu_ce as G
 
 BASE = os.environ.get("ER_DN_BASE", "sentence-transformers/all-MiniLM-L6-v2")
@@ -36,18 +36,21 @@ N_EASY = 700_000
 PART = 1_000_000
 DROPPED = (pl.col("s1").hash(SEED + 5) % 100) < 19
 FOLD = ((pl.col("s1").hash(SEED + 1) % 100) // 20).cast(pl.UInt8)
-TRAIN_C, TEST_C = ("India", "US"), ("France", "India", "US")
+TRAIN_C, TEST_C = countries("f2"), countries("t1")         # labelled training countries / all test countries
 CE_TAGS = tuple(CE_ENV.split(","))
 UNIV = [(ART / "f2" / c, "val") for c in TRAIN_C] + [(ART / "t1" / c, "test") for c in TEST_C]
 
 
 def _ntext(d, which: str) -> pl.LazyFrame:
+    """Bi-encoder text of a universe's entities or records: normalised name (lower-cased raw name if empty) | normalised address."""
     f = "s1_*.parquet" if which == "s1" else "cand_*.parquet"
     nm = pl.when(pl.col("name_norm").fill_null("") == "").then(pl.col("name").fill_null("").str.to_lowercase()).otherwise(pl.col("name_norm"))
     return pl.scan_parquet(d / f).select("id", (nm + " | " + pl.col("addr_norm").fill_null("")).str.slice(0, 200).alias("t"))
 
 
 def _queries(d, kind: str) -> pl.DataFrame:
+    """Entities to search for: all Source-1 entities (test) or the validation-fold entities that remain at test-like
+    density (val)."""
     q = _ntext(d, "s1")
     if kind == "val":
         v = pl.scan_parquet(d / "s1_*.parquet").select("id", "is_val").filter(pl.col("is_val")).select(pl.col("id").alias("s1")).filter(~DROPPED)
@@ -56,6 +59,7 @@ def _queries(d, kind: str) -> pl.DataFrame:
 
 
 def _old_pairs(d, kind: str) -> pl.DataFrame:
+    """Candidates already produced by blocking + the stage-1 filter (validation fold or test)."""
     if kind == "val":
         return pl.read_parquet(d / "ce_val" / "shard_*.parquet", columns=["s1", "r"])
     return pl.scan_parquet(d / "infer_p1" / "shard_*.parquet").filter(pl.col("p1") >= P_MIN).select("s1", "r").collect()
@@ -84,6 +88,7 @@ def data() -> None:
 
 
 def _pool(h, mask):
+    """Mean pooling over the non-padding tokens, then L2 normalisation."""
     import torch
     m = mask.unsqueeze(-1).to(h.dtype)
     v = (h * m).sum(1) / m.sum(1).clamp(min=1)
@@ -91,6 +96,8 @@ def _pool(h, mask):
 
 
 def train(batch: int = 256, lr: float = 5e-5, scale: float = 20.0) -> None:
+    """Fine-tune the bi-encoder on true training pairs with in-batch negatives (symmetric InfoNCE; other records of the
+    same entity are masked), fp16, resumable from checkpoints; saved to artifacts/dn_model/final."""
     import torch
     from transformers import AutoTokenizer, AutoModel
     if (DN_DIR / "final").exists():
@@ -154,6 +161,7 @@ def _encoder():
     dim = model.config.hidden_size
 
     def enc(texts: list[str], bs: int = 1024) -> np.ndarray:
+        """Embed texts in length-sorted batches; returns L2-normalised float16 vectors in the input order."""
         out = np.empty((len(texts), dim), dtype=np.float16)
         order = np.argsort(np.fromiter((len(t) for t in texts), dtype=np.int32, count=len(texts)), kind="stable")
         with torch.no_grad():
@@ -166,6 +174,8 @@ def _encoder():
 
 
 def embed() -> None:
+    """Embed the query entities and all candidate records of every universe (validation fold and test countries);
+    records are saved in parts of PART rows (resumable)."""
     enc = _encoder()
     for d, kind in UNIV:
         dn = d / "dn"
@@ -189,10 +199,13 @@ def embed() -> None:
 
 
 def _load_p(dn) -> np.ndarray:
+    """All record embeddings of a universe, concatenated in p_ids order."""
     return np.concatenate([np.load(f) for f in sorted(dn.glob("p_*.npy"))])
 
 
 def _search(dn, qn: str = "q") -> pl.DataFrame:
+    """Exact top-K cosine search on the GPU: every query entity against every record of its country (chunked to
+    fit in 4 GB)."""
     import torch, gc
     gc.collect(); torch.cuda.empty_cache()                 # free cached encoder memory (4 GB GPU)
     q = np.load(dn / f"{qn}.npy")
@@ -220,6 +233,7 @@ def _search(dn, qn: str = "q") -> pl.DataFrame:
 
 
 def _pair_sim(dn, pairs: pl.DataFrame) -> pl.DataFrame:
+    """Bi-encoder cosine similarity of given (s1, r) pairs (pairs without an embedding are dropped)."""
     q, P = np.load(dn / "q.npy"), _load_p(dn)
     qi = pl.read_parquet(dn / "q_ids.parquet").with_row_index("qi").rename({"id": "s1"})
     pi = pl.read_parquet(dn / "p_ids.parquet").with_row_index("pi").rename({"id": "r"})
@@ -233,6 +247,9 @@ def _pair_sim(dn, pairs: pl.DataFrame) -> pl.DataFrame:
 
 
 def retrieve() -> None:
+    """Nearest-neighbour search for every universe; the similarity floor is chosen on validation (keeps KEEP_POS of
+    the true pairs retrieval can add); prints the recall report; writes the new candidate pairs (at most K_NEW
+    per entity, not already candidates) to dn_new.parquet."""
     for d, kind in UNIV:
         dn = d / "dn"
         if not (dn / "top.parquet").exists():
@@ -301,6 +318,8 @@ def trainpairs() -> None:
 
 
 def cedata(n_old: int = 500_000, n_new: int = 300_000) -> None:
+    """Training pairs for cross-encoder 3: a sample of filtered candidate pairs plus dense-retrieval pairs of the
+    training folds, labelled from the ground truth."""
     out = ART / "ce_train_v3.parquet"
     if out.exists():
         print("[dn cedata] exists, skip"); return
@@ -372,6 +391,9 @@ def _rside(d, kind: str) -> tuple[pl.DataFrame, pl.DataFrame]:
 
 
 def _union(d, kind: str) -> pl.DataFrame:
+    """Stacker input for one universe: old candidates (cross-encoder, stage-1 and cluster-model scores) plus the new
+    dense-retrieval pairs, with dense similarity / rank features, record-competition features (V2) and the
+    per-entity cross-encoder features."""
     top = pl.read_parquet(d / "dn" / "top.parquet", columns=["s1", "r", "dn_rank"])
     if kind == "val":
         old = G._ce_join(pl.read_parquet(d / "ce_val" / "shard_*.parquet").select("s1", "r"), d, "ce_val")
@@ -400,6 +422,8 @@ def _union(d, kind: str) -> pl.DataFrame:
 
 
 def stack() -> None:
+    """Fit the stacker over old + new candidates on the validation fold (2-fold cross-fitting by entity for an honest
+    comparison), report macro F0.5 per threshold, save the model and thresholds, score the test candidates."""
     import lightgbm as lgb
     from train import decode, fscore, PARAMS
     frames, evals = [], {}
@@ -449,11 +473,13 @@ def stack() -> None:
 
 
 def write() -> None:
+    """Write output/dn<suffix>_all: labelled countries use their validation-tuned threshold; every country without
+    training labels (here France) uses ER_DN_FR (default 0.95, preferred over 0.85 on the leaderboard)."""
     import subprocess
     tau = json.loads((ART / "f2" / f"decode_params_dn{VS}.json").read_text())
-    t_fr = float(os.environ.get("ER_DN_FR", "0.95"))          # France (unseen): leaderboard preferred 0.95 over 0.85
+    t_unseen = float(os.environ.get("ER_DN_FR", "0.95"))
     h = f"infer_hits_dn{VS}"
-    spec = {"France": f"{h}:{t_fr}", "India": f"{h}:{tau['India']}", "US": f"{h}:{tau['US']}"}
+    spec = {c: f"{h}:{tau.get(c, t_unseen)}" for c in TEST_C}
     subprocess.run([sys.executable, "-W", "ignore", "multi_variant.py", f"dn{VS}_all"] + [f"{k}={v}" for k, v in spec.items()], check=True)
 
 

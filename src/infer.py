@@ -19,10 +19,13 @@ KEEP_MIN = 0.30      # rows below this p2 can never be selected (tau >= 0.4), so
 
 
 def _countries(test_tag):
+    """Countries of the test universe (one folder per country under artifacts/<tag>)."""
     return sorted(p.name for p in (ART / test_tag).iterdir() if p.is_dir())
 
 
 def predict_country(train_tag: str, test_tag: str, mname: str, c: str, stage1_only: bool = False) -> None:
+    """Test-time scoring of one country: stage-1 p1 for every blocking candidate, record-competition
+    statistics, then (unless stage1_only) the stage-2 model on the candidates that pass the filter."""
     d = ART / test_tag / c
     md = ART / train_tag / f"models_{mname}"
     m1 = lgb.Booster(model_file=str(md / "model_s1_k0.txt"))
@@ -75,6 +78,8 @@ def candidate_lists(test_tag: str, c: str) -> pl.DataFrame:
 
 def write_outputs(test_tag: str, mname: str, train_tag: str) -> None:
     # ER_DECODE=<suffix> picks thresholds tuned on another validation (e.g. d19 = leaderboard-like density)
+    """Decode the stage-2 scores (threshold, one owner per record, singleton gate) into matching_results.tsv
+    (and candidate_pairs.tsv) for every test country."""
     sfx = ("_" + os.environ["ER_DECODE"]) if os.environ.get("ER_DECODE") else ""
     prm = json.loads((ART / train_tag / f"decode_params_{mname}{S2TAG}{sfx}.json").read_text())
     tau, gate = prm["tau"], prm["gate"]

@@ -12,7 +12,7 @@ sim_drop.py) and validated there.
 
     python stage2_v3.py prep            record tables (cleaned names, localities, name statistics) for train + test
     python stage2_v3.py feats           pair features (train: pred_d19 pairs, test: infer_p1 pairs)
-    python stage2_v3.py train           fit + validate + tune; also a leave-one-country-out check (fit US -> score India)
+    python stage2_v3.py train           fit + validate + tune; also a leave-one-country-out check (fit on one labelled country, score another)
     python stage2_v3.py infer           score the test set -> artifacts/t1/<c>/infer_hits_v3
 Every command is resumable.
 """
@@ -25,14 +25,14 @@ import polars as pl
 import lightgbm as lgb
 from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
-from config import ART, SEED, PMIN, HSFX
+from config import ART, SEED, PMIN, HSFX, countries
 from normalize import STATES, _ascii
 from features import add_context
 from train import FEATS2, FOLD, PARAMS, add_stage2, with_anc, rp_stats, decode, fscore, train_resumable
 import cluster
 
 TRAIN, TEST, MN = "f2", "t1", "all"
-TRAIN_C, TEST_C = ("India", "US"), ("France", "India", "US")
+TRAIN_C, TEST_C = countries(TRAIN), countries(TEST)       # labelled training countries / all test countries
 SUF = "d19"
 DROPPED = (pl.col("s1").hash(SEED + 5) % 100) < 19
 P_MIN = PMIN
@@ -69,6 +69,8 @@ def _rec(df: pl.DataFrame, country: str) -> pl.DataFrame:
 
 
 def prep_country(tag: str, c: str) -> None:
+    """Per-country record tables for the v3 features: cleaned names, localities (address components frequent
+    in Source 1), name frequencies and token idf; training statistics exclude the dropped entities."""
     d = ART / tag / c
     if (d / "v3_cand.parquet").exists():
         return
@@ -98,6 +100,7 @@ _IDF_MAX = 10.0
 
 
 def _init(idf: dict, idf_max: float):
+    """Pool initialiser: share the token idf table with the workers."""
     global _IDF, _IDF_MAX
     _IDF, _IDF_MAX = idf, idf_max
 
@@ -115,6 +118,8 @@ def _match(a: list, b: list) -> list:
 
 
 def _chunk(c: dict) -> np.ndarray:
+    """Pool worker: cleaned-name similarity, idf-weighted token coverage, rarest missing token and locality
+    agreement / conflict features for a chunk of pairs."""
     n = len(c["t1"])
     out = np.full((n, 15), np.nan, dtype=np.float32)
     for i in range(n):
@@ -187,10 +192,13 @@ _VOC2: dict = {}
 
 
 def _close(t: str, s_: str) -> bool:
+    """True when two tokens are near-identical (Jaro-Winkler >= 0.85 or a small edit distance)."""
     return JaroWinkler.similarity(t, s_) >= 0.85 or Levenshtein.distance(t, s_) <= (1 if len(t) <= 4 else 2)
 
 
 def _novel(t1: list, t2: list, use_voc: bool = True) -> int:
+    """Number of distinctive words in t2 that t1 lacks (ignoring short or numeric words and, if use_voc, words of
+    the learnt noise vocabulary)."""
     n = 0
     for t in t2 or []:
         if len(t) < 3 or t.isdigit() or any(_close(t, x) for x in (t1 or [])):
@@ -202,6 +210,7 @@ def _novel(t1: list, t2: list, use_voc: bool = True) -> int:
 
 
 def _init_voc(voc: set):
+    """Pool initialiser: share the noise vocabulary (words that genuine copies add) with the workers."""
     global _VOC, _VOC2
     _VOC = voc
     _VOC2 = {}
@@ -210,6 +219,7 @@ def _init_voc(voc: set):
 
 
 def _nov_chunk(c: dict) -> np.ndarray:
+    """Pool worker: distinctive words a record adds and reference words it lacks, for a chunk of pairs."""
     out = np.zeros((len(c["t1"]), 2), dtype=np.float32)
     for i, (t1, t2) in enumerate(zip(c["t1"], c["t2"])):
         out[i, 0] = _novel(t1, t2)                      # distinctive words the record adds
@@ -240,6 +250,8 @@ def build_vocab() -> set:
 
 
 def nov_feats(tag: str, c: str, src: str, voc: set) -> None:
+    """Twin features for one country: distinctive words each candidate adds to / misses from the entity name
+    (resumable)."""
     d = ART / tag / c
     out = d / "nov"
     if (out / "_DONE").exists():
@@ -338,6 +350,7 @@ def _frames(c: str, per_mille: int) -> tuple:
 
 
 def _eval(c: str, va: pl.DataFrame, label: str) -> dict:
+    """Macro F0.5 per threshold on the validation fold at test-like density; prints and returns {tau: F0.5}."""
     d = ART / TRAIN / c
     s1_ids = (pl.read_parquet(d / "s1_*.parquet", columns=["id", "is_val"]).filter(pl.col("is_val"))
               .rename({"id": "s1"}).filter(~DROPPED)["s1"])
@@ -348,6 +361,8 @@ def _eval(c: str, va: pl.DataFrame, label: str) -> dict:
 
 
 def train_all() -> None:
+    """Train the v3 stage-2 model on the training folds of every labelled country, compare it with the cluster
+    model on validation, save the best threshold, and run a leave-one-country-out check."""
     md = ART / TRAIN / f"models_{MN}"
     frames = {}
     for c in TRAIN_C:
@@ -370,14 +385,16 @@ def train_all() -> None:
     best = max(mean, key=mean.get)
     print(f"[v3 train] BEST mean F0.5 {mean[best]:.4f} at tau={best}")
     (ART / TRAIN / f"decode_params_{MN}_v3{MSFX}.json").write_text(json.dumps(dict(tau=best, gate=0.0, assign=True, per_country={c: table[c][best] for c in TRAIN_C})))
-    # leave-one-country-out: does v3 help a country the model has never seen? (proxy for France)
-    print("\n== leave-one-country-out: fit on US only, score India")
-    us = frames["US"][0]
-    va = frames["India"][1]
-    for label, feats in (("without v3 features", FEATS2), ("with v3 features   ", FEATS3)):
-        path = md / f"model_s2_loco_{'v3' if feats is FEATS3 else 'base'}{MSFX}.txt"
-        m = train_resumable(us.select(feats).to_numpy(), us["y"].to_numpy(), feats, path, 400)
-        _eval("India", va.with_columns(pl.Series("p2", m.predict(va.select(feats).to_numpy(), num_threads=12))), label)
+    # leave-one-country-out: does v3 help a country the model has never seen? (proxy for the unseen test country)
+    held, fit = TRAIN_C[0], TRAIN_C[1:]
+    if fit:
+        print(f"\n== leave-one-country-out: fit on {', '.join(fit)} only, score {held}")
+        tr_fit = pl.concat([frames[c][0] for c in fit])
+        va = frames[held][1]
+        for label, feats in (("without v3 features", FEATS2), ("with v3 features   ", FEATS3)):
+            path = md / f"model_s2_loco_{'v3' if feats is FEATS3 else 'base'}{MSFX}.txt"
+            m = train_resumable(tr_fit.select(feats).to_numpy(), tr_fit["y"].to_numpy(), feats, path, 400)
+            _eval(held, va.with_columns(pl.Series("p2", m.predict(va.select(feats).to_numpy(), num_threads=12))), label)
     imp = sorted(zip(FEATS3, m3.feature_importance("gain")), key=lambda x: -x[1])
     print("\n   new-feature gains:", [(n, int(g)) for n, g in imp if n in V3_NAMES])
 
@@ -398,6 +415,7 @@ def fscore_w(va: pl.DataFrame, tau: float, gt: pl.DataFrame, s1_ids: pl.Series, 
 
 
 def train_w(X, y, wt, names, path, rounds=400):
+    """Resumable LightGBM training with sample weights (trees added in blocks of 100, saved after each block)."""
     ds = lgb.Dataset(X, label=y, weight=wt, feature_name=names, free_raw_data=False)
     booster = lgb.Booster(model_file=str(path)) if path.exists() else None
     done = booster.num_trees() if booster else 0
@@ -447,6 +465,7 @@ def train_weighted(ws: list) -> None:
 
 
 def infer_all(model: str = f"model_s2_v3{MSFX}.txt", hits: str = f"infer_hits_v3{MSFX}{HSFX}") -> None:
+    """Score the filtered test candidates of every country with the v3 stage-2 model (keeps p2 >= 0.3)."""
     m3 = lgb.Booster(model_file=str(ART / TRAIN / f"models_{MN}" / model))
     for c in TEST_C:
         d = ART / TEST / c

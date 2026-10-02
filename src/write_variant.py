@@ -1,6 +1,6 @@
 """Decode-only submission variants (no model runs): per-country thresholds and an optional same-name rescue.
 
-    python write_variant.py <name> <tau_France> <tau_India> <tau_US> [rescue_countries]
+    python write_variant.py <name> <tau per test country, alphabetical: France India US> [rescue_countries]
 
 Reads the stage-2 scores already saved by infer.py (artifacts/t1/<country>/infer_hits_anc, p2 >= 0.30) and writes
 output/<name>/matching_results.tsv.  rescue_countries (e.g. "France"): in those countries a pair with p2 >= 0.30 is
@@ -10,7 +10,7 @@ Each record still goes to its single best Source-1 entity.
 from __future__ import annotations
 import os, sys, json
 import polars as pl
-from config import ART, DATA, ROOT
+from config import ART, DATA, ROOT, countries
 
 RESCUE_MIN = 0.30
 HITS = os.environ.get("ER_HITS", "infer_hits_anc")          # which saved stage-2 scores to decode
@@ -19,10 +19,12 @@ if __name__ == "__main__":
     name = sys.argv[1]
     # "auto" = the threshold tuned on the leaderboard-like validation (ER_TAUJSON in artifacts/f2)
     #  "auto+0.15" = that threshold plus an offset (France was over-matching on the leaderboard)
-    args = sys.argv[2:5]
+    test_c = countries("t1")
+    args = sys.argv[2:2 + len(test_c)]
     auto = json.loads((ART / "f2" / os.environ.get("ER_TAUJSON", "decode_params_all_v3.json")).read_text())["tau"] if any(a.startswith("auto") for a in args) else None
-    taus = {c: (min(0.97, auto + float(v[4:] or 0)) if v.startswith("auto") else float(v)) for c, v in zip(("France", "India", "US"), args)}
-    rescue = set(sys.argv[5].split(",")) if len(sys.argv) > 5 and sys.argv[5] else set()
+    taus = {c: (min(0.97, auto + float(v[4:] or 0)) if v.startswith("auto") else float(v)) for c, v in zip(test_c, args)}
+    k = 2 + len(test_c)
+    rescue = set(sys.argv[k].split(",")) if len(sys.argv) > k and sys.argv[k] else set()
     out = ROOT / "output" / name
     out.mkdir(parents=True, exist_ok=True)
     s1_all = pl.read_csv(DATA / "test" / "test_source1.tsv", separator="\t", quote_char=None, infer_schema_length=0, columns=["entity_id"])

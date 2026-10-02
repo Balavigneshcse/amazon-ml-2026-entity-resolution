@@ -78,6 +78,7 @@ def _squash(e: pl.Expr) -> pl.Expr:
 
 
 def _tokens(e: pl.Expr) -> pl.Expr:
+    """Split a string expression into whitespace tokens (empty tokens removed)."""
     return (e.str.replace_all(r"\s+", " ").str.strip_chars().str.split(" ")
             .list.eval(pl.element().filter(pl.element().str.len_chars() > 0)))
 

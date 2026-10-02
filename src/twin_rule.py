@@ -11,7 +11,7 @@ from __future__ import annotations
 import os, sys, json
 os.environ.setdefault("ER_TWIN", "1")
 import polars as pl
-from config import ART, DATA, ROOT
+from config import ART, DATA, ROOT, countries
 import stage2_v3 as V
 
 HITS = os.environ.get("ER_HITS", "infer_hits_v4_tw")
@@ -19,7 +19,7 @@ HITS = os.environ.get("ER_HITS", "infer_hits_v4_tw")
 if __name__ == "__main__":
     src, name = sys.argv[1], sys.argv[2]
     prm = json.loads((ART / "f2" / "decode_params_all_v4_tw_tl.json").read_text())
-    taus = {"France": min(0.97, prm["tau"] + 0.1), "India": prm["tau"], "US": prm["tau"]}
+    taus = {c: prm["tau"] if c in countries("f2") else min(0.97, prm["tau"] + 0.1) for c in countries("t1")}  # unseen: +0.1
     if "--tau" in sys.argv:
         taus.update({k: float(v) for k, v in (x.split("=") for x in sys.argv[sys.argv.index("--tau") + 1].split(","))})
     out = ROOT / "output" / name

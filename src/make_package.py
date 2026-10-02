@@ -22,6 +22,8 @@ P_MIN = PMIN
 
 
 def candidates(full: set) -> pl.DataFrame:
+    """candidate_pairs.tsv: exactly the pairs the final models score (stage-1-filtered blocking candidates plus
+    dense-retrieval pairs when ER_DN=1; countries in full use the whole top-100 list); one row per entity."""
     parts = []
     for c in sorted(p.name for p in (ART / "t1").iterdir() if p.is_dir()):
         d = ART / "t1" / c
@@ -41,6 +43,8 @@ def candidates(full: set) -> pl.DataFrame:
 
 
 def main() -> None:
+    """Build package/<TEAM>_submission.zip with output/, code/business_entity_resolution/ and
+    Documentation_template.md at the zip root, after running the organisers' validator."""
     variant = sys.argv[1]
     full = set(sys.argv[sys.argv.index("--full") + 1].split(",")) if "--full" in sys.argv else set()
     final = ROOT / "output" / variant / "matching_results.tsv"
@@ -59,7 +63,7 @@ def main() -> None:
     for f in ("README.md", "requirements.txt"):
         shutil.copy2(ROOT / f, code / f)
     shutil.copy2(ROOT / "Documentation.md", stage / "Documentation_template.md")
-    (stage / "output" / "FINAL_VARIANT.txt").write_text(f"matching_results.tsv = output/{variant}; full-candidate countries: {sorted(full)}\n")
+    (ROOT / "package" / "FINAL_VARIANT.txt").write_text(f"matching_results.tsv = output/{variant}; full-candidate countries: {sorted(full)}\n")
     # validate the staged files with the organisers' script (matches must be a subset of candidates)
     val = ROOT.parent / "dataset" / "student_resource" / "utils" / "validate_submission.py"
     subprocess.run([sys.executable, str(val), "--matching", str(stage / "output" / "matching_results.tsv"),
@@ -68,7 +72,7 @@ def main() -> None:
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for f in sorted(stage.rglob("*")):
             if f.is_file():
-                z.write(f, f.relative_to(stage.parent))
+                z.write(f, f.relative_to(stage))          # output/, code/, Documentation_template.md at the zip root
     print(f"[package] wrote {zpath}  ({zpath.stat().st_size / 1e6:,.0f} MB)")
     for f in sorted(stage.rglob("*")):
         if f.is_file() and f.stat().st_size > 1e6:

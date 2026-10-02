@@ -1,14 +1,14 @@
 @echo off
 rem STEP 10: third cross-encoder (continues from the L-12 model) trained on candidate + dense-retrieval pairs -> output\dn23_all
-rem Resumable: if it stops, run the same command again. Keep DaVinci / Docker / WhatsApp closed (GPU memory).
-cd /d "C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML\business_entity_resolution\src"
+rem Resumable: if it stops, run the same command again. Needs ~3.5 GB free GPU memory (close other GPU applications).
+cd /d "%~dp0"
 set "ER_PMIN=0.02"
 echo ===== 1/6 training pairs (dense neighbours of training entities) %time%
 python -u -W ignore dense.py trainpairs || goto fail
 python -u -W ignore dense.py cedata || goto fail
 echo ===== 2/6 fine-tune cross-encoder 3 on the GPU (~70 min) %time%
 set "ER_CE_TAG=_v3"
-set "ER_CE_BASE=C:\Users\Balavignesh K\Documents\Studies\Hackathon\Amazon ML\business_entity_resolution\artifacts\ce_model_l12\final"
+set "ER_CE_BASE=@art/ce_model_l12/final"
 python -u -W ignore gpu_ce.py train || goto fail
 echo ===== 3/6 score validation + test candidates (~95 min) %time%
 python -u -W ignore gpu_ce.py score || goto fail
@@ -25,5 +25,5 @@ python -u -W ignore dense.py write || goto fail
 echo ===== STEP 10 DONE %time%
 exit /b 0
 :fail
-echo ===== STEP 10 STOPPED WITH AN ERROR %time% - send me the error, then run the same command again to resume
+echo ===== STEP 10 STOPPED WITH AN ERROR %time% - fix the reported error, then run the same command again to resume
 exit /b 1

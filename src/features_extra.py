@@ -21,10 +21,12 @@ X_NAMES = ["nm_tri_jac", "nm_bi_jac", "nm_me_ab", "nm_me_ba", "nm_me_min", "nm_s
 
 
 def _grams(s: str, n: int) -> set:
+    """Character n-grams of a string (the string itself if shorter than n)."""
     return {s[i:i + n] for i in range(len(s) - n + 1)} if len(s) >= n else {s}
 
 
 def _jac(a: set, b: set) -> float:
+    """Jaccard similarity of two sets (NaN if either is empty)."""
     return len(a & b) / len(a | b) if a and b else NAN
 
 
@@ -46,6 +48,8 @@ def _me(a: list, b: list) -> float:
 
 
 def _chunk(c: dict) -> np.ndarray:
+    """Pool worker: extra features (X_NAMES) for a chunk of pairs: character n-gram overlap, fuzzy token coverage in
+    both directions, skeleton and prefix matches, address token coverage."""
     n = len(c["nsq_a"])
     out = np.full((n, len(X_NAMES)), NAN, dtype=np.float32)
     for i in range(n):
